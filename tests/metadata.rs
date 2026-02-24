@@ -1,6 +1,6 @@
-use hypr_conf::{
-    ConfigMetaSpec, TYPE_KEY, discover_config_files, parse_metadata_header, resolve_config_path,
-};
+#[cfg(feature = "discovery")]
+use hypr_conf::discover_config_files;
+use hypr_conf::{ConfigMetaSpec, TYPE_KEY, parse_metadata_header, resolve_config_path};
 use std::fs;
 use tempfile::tempdir;
 
@@ -18,6 +18,7 @@ left = 33
 }
 
 #[test]
+#[cfg(feature = "discovery")]
 fn discovers_renamed_config_by_metadata() {
     let dir = tempdir().expect("tempdir");
     let nested = dir.path().join("hypr").join("split");

@@ -3,9 +3,18 @@
 //! `hypr-conf` lets tools identify config files by a simple human-readable
 //! header instead of hard-coded filenames.
 
+mod source;
+mod toml_include;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+pub use source::{
+    collect_source_graph, expand_source_expression_to_path, extract_sources, has_glob_chars,
+    parse_source_value, resolve_source_targets, source_expression_matches_path,
+};
+pub use toml_include::{IncludeLoadError, load_toml_with_includes};
 
 /// Primary metadata key for config type.
 pub const TYPE_KEY: &str = "type";
@@ -49,8 +58,7 @@ pub fn parse_metadata_header(content: &str) -> HashMap<String, String> {
     let Some(first_line) = lines.next() else {
         return out;
     };
-    let first_line = first_line.trim_start_matches('\u{feff}').trim();
-    if !first_line.eq_ignore_ascii_case(HEADER_LINE) {
+    if !header_enabled_and_valid(first_line) {
         return out;
     }
 
@@ -61,9 +69,7 @@ pub fn parse_metadata_header(content: &str) -> HashMap<String, String> {
         }
 
         let body = trimmed.trim_start_matches('#').trim();
-        let pair = body
-            .split_once('=')
-            .or_else(|| body.split_once(':'));
+        let pair = body.split_once('=').or_else(|| body.split_once(':'));
         let Some((key, value)) = pair else {
             continue;
         };
@@ -76,6 +82,21 @@ pub fn parse_metadata_header(content: &str) -> HashMap<String, String> {
     }
 
     out
+}
+
+#[inline]
+fn header_enabled_and_valid(first_line: &str) -> bool {
+    let normalized = first_line.trim_start_matches('\u{feff}').trim();
+
+    #[cfg(feature = "strict-header")]
+    {
+        normalized.eq_ignore_ascii_case(HEADER_LINE)
+    }
+    #[cfg(not(feature = "strict-header"))]
+    {
+        let _ = normalized;
+        true
+    }
 }
 
 /// Parse required metadata keys from content.
@@ -124,30 +145,39 @@ pub fn file_matches(path: &Path, spec: &ConfigMetaSpec<'_>) -> bool {
 /// Returned paths are sorted for deterministic behavior.
 #[must_use]
 pub fn discover_config_files(root: &Path, spec: &ConfigMetaSpec<'_>) -> Vec<PathBuf> {
-    let mut stack = vec![root.to_path_buf()];
-    let mut matches = Vec::new();
-
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-
-            if file_matches(&path, spec) {
-                matches.push(path);
-            }
-        }
+    #[cfg(not(feature = "discovery"))]
+    {
+        let _ = (root, spec);
+        return Vec::new();
     }
 
-    matches.sort();
-    matches
+    #[cfg(feature = "discovery")]
+    {
+        let mut stack = vec![root.to_path_buf()];
+        let mut matches = Vec::new();
+
+        while let Some(dir) = stack.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+
+                if file_matches(&path, spec) {
+                    matches.push(path);
+                }
+            }
+        }
+
+        matches.sort();
+        matches
+    }
 }
 
 /// Resolve config path using metadata discovery with deterministic fallback.
